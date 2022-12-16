@@ -1,26 +1,41 @@
-#include <Wire.h>
-#include "Adafruit_VL6180X.h"
-
-Adafruit_VL6180X vl = Adafruit_VL6180X();
-
-#include <PubSubClient.h>
+#include <Statistical.h>
 
 #include <ESP8266WiFi.h>
-
+#include <PubSubClient.h>
 #include "credentials.h"
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+#include <Wire.h>
+#include "Adafruit_VL6180X.h"
+Adafruit_VL6180X vl = Adafruit_VL6180X();
+
+#define MAX_SAMPLES 255
+uint8_t samples[MAX_SAMPLES + 1];
+uint8_t sample_count = 0;
+
 // define WLAN_SSID "MyNetwork"
 // define WLAN_PASS "MyPassword"
 
 #define MQTT_SERVER      "192.168.1.2"
 #define MQTT_SERVERPORT  1883                   // use 8883 for SSL
 
-WiFiClient espClient;
-PubSubClient client(espClient);
 
 void setup() {
-  pinMode(D4, OUTPUT);
-  digitalWrite(D4, HIGH);
   Serial.begin(115200);
+  while (!Serial) { // wait for serial port to open on native usb devices
+    delay(1);
+  }
+  
+  pinMode(D4, OUTPUT);
+  digitalWrite(D4, HIGH); 
+
+  Serial.println("Adafruit VL6180x test!");
+  if (! vl.begin()) {
+    Serial.println("Failed to find sensor");
+    while (1);
+  }
+  Serial.println("Sensor found!");
 
   WiFi.begin(WLAN_SSID, WLAN_PASS);
   client.setServer(MQTT_SERVER, MQTT_SERVERPORT); //connecting to mqtt server
@@ -36,21 +51,33 @@ void loop() {
   {
     reconnect();
   }
-  
-  if ((millis() < last) || (millis() - last > 10000)) {
-    digitalWrite(D4, LOW);
-    delay(20);
-  
+
+  if(1) {
+  //if ((millis() < last) || (millis() - last > 250)) {
     uint8_t range = vl.readRange();
     uint8_t status = vl.readRangeStatus();
-  
+    
     if (status == VL6180X_ERROR_NONE) {
       Serial.print("Range: "); Serial.println(range);
-    }
-  
-    // Some error occurred, print it out!
+      samples[sample_count] = range;
+      
+      if (sample_count == MAX_SAMPLES) {
+        digitalWrite(D4, LOW);
+        delay(20);
+        digitalWrite(D4, HIGH);   
+        
+        Array_Stats<uint8_t> Data_Array(samples, sizeof(samples) / sizeof(samples[0])); 
+        client.publish("xmas/tree/water/raw", String(Data_Array.Quartile(2)).c_str());
     
-    if  ((status >= VL6180X_ERROR_SYSERR_1) && (status <= VL6180X_ERROR_SYSERR_5)) {
+        Serial.print("### published median value ");
+        Serial.println(Data_Array.Quartile(2));
+        sample_count = 0;
+      }
+      else {
+        sample_count = sample_count + 1;
+      }
+    }
+    else if  ((status >= VL6180X_ERROR_SYSERR_1) && (status <= VL6180X_ERROR_SYSERR_5)) {
       Serial.println("System error");
     }
     else if (status == VL6180X_ERROR_ECEFAIL) {
@@ -77,12 +104,10 @@ void loop() {
     else if (status == VL6180X_ERROR_RANGEOFLOW) {
       Serial.println("Range reading overflow");
     }
-    
-    digitalWrite(D4, HIGH);    
-    client.publish("xmas/tree/water/raw", String(range).c_str());
-    last = millis(); 
-  }
 
+    last = millis();
+  }
+  
   client.loop();
 }
 
@@ -93,22 +118,10 @@ void callback(char* topic, byte* payload, unsigned int length) {   //callback in
 
 void reconnect() {
   while (!client.connected()) {
-    //Serial.println("Attempting MQTT connection...");
+    Serial.println("Attempting MQTT connection...");
     if (client.connect("ESP8266_xmastree")) {
-      //Serial.println("connected");
-      // Once connected, publish an announcement...
-      //client.publish("outTopic", "Nodemcu connected to MQTT");
-      // ... and resubscribe
-      //client.subscribe("inTopic");
-
-    } else {
-      /*
-      
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      */
+      Serial.println("connected");      
+    } else {      
       delay(5000);
     }
   }
@@ -118,13 +131,6 @@ void connectmqtt()
 {
   client.connect("ESP8266_xmastree");  // ESP will connect to mqtt broker with clientID
   {
-    //Serial.println("connected to MQTT");
-    // Once connected, publish an announcement...
-
-    // ... and resubscribe
-    //client.subscribe("inTopic"); //topic=Demo
-    //client.publish("outTopic",  "connected to MQTT");
-
     if (!client.connected())
     {
       reconnect();
